@@ -7,6 +7,18 @@ module "vpc" {
   fargate-assemble            = "fargate-assemble"
 }
 
+module "ec2" {
+  source          = "../../modules/ec2"
+  ami_id          = "ami-008a9f4478d7401d4"   
+  instance_type   = "t3.micro"
+  subnet_id       = module.vpc.public_subnet_ids[0]
+  vpc_id          = module.vpc.vpc_id
+  key_name        = "dev-key"  
+  allowed_ssh_cidrs = ["0.0.0.0/0"]
+  project         = "fargate-assemble-dev"
+}
+
+
 module "ecr" {
   source                  = "../../modules/ecr"
   fargate-assemble-ecr    = "fargate-assemble-ecr"
@@ -17,5 +29,8 @@ output "ecr_repository_url" {
 }
 output "vpc_id" {
   value = module.vpc.vpc_id
+}
+output "public_ip" {
+  value = module.ec2.public_ip
 }
 
