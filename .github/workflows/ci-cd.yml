@@ -5,13 +5,16 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+  AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
     outputs:
-      image: ${{ steps.set-image.outputs.image }}
-    env:
-      ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY }}
+      image: ${{ steps.build-and-push-image.outputs.image }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -21,28 +24,21 @@ jobs:
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
+          aws-region: ${{ env.AWS_REGION }}
 
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Build Docker image
-        run: |
-          docker build -t $ECR_REPOSITORY:latest ./app
-
-      - name: Tag image with full ECR URL
-        id: set-image
+      - name: Build & Push Docker image to ECR
+        id: build-and-push-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
         run: |
-          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:latest
-          echo "IMAGE=$IMAGE_URI" >> $GITHUB_OUTPUT
-          docker tag $ECR_REPOSITORY:latest $IMAGE_URI
-
-      - name: Push Docker image to ECR
-        run: |
-          docker push ${{ steps.set-image.outputs.image }}
+          IMAGE_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}:latest
+          docker build -t $IMAGE_URI ./app
+          docker push $IMAGE_URI
+          echo "image=$IMAGE_URI" >> "$GITHUB_OUTPUT"
 
   deploy:
     runs-on: ubuntu-latest
@@ -55,8 +51,24 @@ jobs:
           username: ubuntu
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com
-            docker pull ${{ needs.build-and-push.outputs.image }}
-            docker stop app || true
-            docker rm app || true
-            docker run -d --name app -p 80:3000 ${{ needs.build-and-push.outputs.image }}
+            # Install AWS CLI if not installed
+            if ! command -v aws &> /dev/null; then
+              sudo apt-get update
+              sudo apt-get install -y unzip curl
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip awscliv2.zip
+              sudo ./aws/install
+            fi
+
+            # Login to ECR
+            aws ecr get-login-password --region ${{ env.AWS_REGION }} | sudo docker login --username AWS --password-stdin ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+
+            # Pull latest image
+            sudo docker pull ${{ needs.build-and-push.outputs.image }}
+
+            # Stop & remove old container if running
+            sudo docker stop app || true
+            sudo docker rm app || true
+
+            # Run new container (adjust ports if needed)
+            sudo docker run -d --name app -p 80:3000 ${{ needs.build-and-push.outputs.image }}
